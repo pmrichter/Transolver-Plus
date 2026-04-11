@@ -20,7 +20,7 @@ parser.add_argument('--cfd_model', default='Transolver')
 parser.add_argument('--cfd_mesh', action='store_true')
 parser.add_argument('--r', default=0.2, type=float)
 parser.add_argument('--weight', default=0.5, type=float)
-parser.add_argument('--nb_epochs', default=200, type=float) #original default: 200
+parser.add_argument('--nb_epochs', default=1, type=float) #original default: 200
 args = parser.parse_args()
 print(args)
 
