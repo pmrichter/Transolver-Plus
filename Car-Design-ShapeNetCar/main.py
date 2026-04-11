@@ -8,20 +8,21 @@ from dataset.dataset import GraphDataset
 from models.Transolver import Model
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', default='/data/PDE_data/mlcfd_data/training_data')
-parser.add_argument('--save_dir', default='/data/PDE_data/mlcfd_data/preprocessed_data')
+parser.add_argument('--data_dir', default='/home/philipp/data/mlcfd_data/training_data')
+parser.add_argument('--save_dir', default='/home/philipp/data/mlcfd_data/preprocessed_data')
 parser.add_argument('--fold_id', default=0, type=int)
 parser.add_argument('--gpu', default=0, type=int)
 parser.add_argument('--val_iter', default=10, type=int)
 parser.add_argument('--cfd_config_dir', default='cfd/cfd_params.yaml')
-parser.add_argument('--cfd_model')
+parser.add_argument('--cfd_model', default='Transolver')
 parser.add_argument('--cfd_mesh', action='store_true')
 parser.add_argument('--r', default=0.2, type=float)
 parser.add_argument('--weight', default=0.5, type=float)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--batch_size', default=1, type=int)
-parser.add_argument('--nb_epochs', default=200, type=int)
-parser.add_argument('--preprocessed', default=1, type=int)
+parser.add_argument('--nb_epochs', default=200, type=int) #original default was 200
+parser.add_argument('--preprocessed', default=1, type=int) #original default was 1
+parser.add_argument('--polar', default=1, type=int)
 args = parser.parse_args()
 print(args)
 
@@ -35,17 +36,25 @@ train_data, val_data, coef_norm = load_train_val_fold(args, preprocessed=args.pr
 train_ds = GraphDataset(train_data, use_cfd_mesh=args.cfd_mesh, r=args.r)
 val_ds = GraphDataset(val_data, use_cfd_mesh=args.cfd_mesh, r=args.r)
 
+#just in case the dimensions differ:
+space_dim=7
+out_dim=4
+if args.polar:
+    space_dim=9
+    out_dim=6
+
 if args.cfd_model == 'Transolver':
-    model = Model(n_hidden=256, n_layers=8, space_dim=7,
+    model = Model(n_hidden=256, n_layers=8, space_dim=space_dim,
                   fun_dim=0,
                   n_head=8,
-                  mlp_ratio=2, out_dim=4,
+                  mlp_ratio=2, out_dim=out_dim,
                   slice_num=32,
-                  unified_pos=0).cuda()
+                  unified_pos=0,
+                  polar=args.polar).cuda()
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 if not os.path.exists(path):
     os.makedirs(path)
 
 model = train.main(device, train_ds, val_ds, model, hparams, path, val_iter=args.val_iter, reg=args.weight,
-                   coef_norm=coef_norm)
+                   coef_norm=coef_norm, polar=args.polar)

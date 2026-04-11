@@ -74,7 +74,7 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
+def main(device, train_dataset, val_dataset, Net, hparams, path, polar, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=hparams['lr'])
     lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
