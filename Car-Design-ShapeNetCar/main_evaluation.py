@@ -10,7 +10,18 @@ from utils.drag_coefficient import cal_coefficient
 from dataset.load_dataset import load_train_val_fold_file
 from dataset.dataset import GraphDataset
 import scipy as sc
-from main import get_device
+
+def get_device():
+    device = None
+    if torch.cuda.is_available():
+        device = 'cuda:0'
+    elif torch.backends.mps.is_available():
+        device= 'mps'
+    else:
+        device='cpu'
+    print(f"Using device: {device}")
+
+    return torch.device(device)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_dir', default='/home/philipp/data/mlcfd_data/training_data')
@@ -25,9 +36,7 @@ parser.add_argument('--nb_epochs', default=200, type=float)
 args = parser.parse_args()
 print(args)
 
-
 device = get_device()
-print(f'Using device: {device}')
 
 train_data, val_data, coef_norm, vallst = load_train_val_fold_file(args, preprocessed=True)
 val_ds = GraphDataset(val_data, use_cfd_mesh=args.cfd_mesh, r=args.r)
