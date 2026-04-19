@@ -9,12 +9,13 @@ ACTIVATION = {'gelu': nn.GELU, 'tanh': nn.Tanh, 'sigmoid': nn.Sigmoid, 'relu': n
 
 
 class Physics_Attention_Irregular_Mesh(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0., slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0., slice_num=64, slice_attn='elliptic_diag'):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.scale = dim_head ** -0.5
+        self.slice_attn = slice_attn
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -24,6 +25,15 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         for l in [self.in_project_slice]:
             torch.nn.init.orthogonal_(l.weight)  # use a principled initialization
+        if slice_attn == 'standard':
+            self.slice_to_q = nn.Linear(dim_head, dim_head, bias=False)
+            self.slice_to_k = nn.Linear(dim_head, dim_head, bias=False)
+        elif slice_attn == 'elliptic_full':
+            self.elliptic_M = nn.Linear(dim_head, dim_head, bias=False)
+        elif slice_attn == 'elliptic_diag':
+            self.elliptic_M = nn.Parameter(torch.ones(dim_head))
+        elif slice_attn != 'none':
+            raise ValueError(f"slice_attn must be 'standard', 'elliptic_full', 'elliptic_diag', or 'none', got '{slice_attn}'")
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -37,11 +47,33 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         B, N, C = x.shape
 
         ### (1) Slice
-        fx_mid = self.in_project_fx(x).reshape(B, N, self.heads, self.dim_head) \
-            .permute(0, 2, 1, 3).contiguous()  # B H N C
-        x_mid = self.in_project_x(x).reshape(B, N, self.heads, self.dim_head) \
-            .permute(0, 2, 1, 3).contiguous()  # B H N C
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)  # B H N G
+        fx_mid = self.in_project_fx(x).reshape(B, N, self.heads, self.dim_head).permute(0, 2, 1, 3).contiguous()  # B H N C
+        x_mid = self.in_project_x(x).reshape(B, N, self.heads, self.dim_head).permute(0, 2, 1, 3).contiguous()  # B H N C
+
+        if self.slice_attn == 'none':
+            slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)  # B H N G
+        else:
+            slice_weights_init = self.softmax(self.in_project_slice(x_mid) / self.temperature)  # B H N G
+
+            slice_norm_init = slice_weights_init.sum(2)  # B H G
+            slice_token_ctx = torch.einsum("bhnc,bhng->bhgc", x_mid, slice_weights_init)
+            slice_token_ctx = slice_token_ctx / ((slice_norm_init + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))  # B H G C
+
+            if self.slice_attn == 'standard':
+                ctx_q = self.slice_to_q(x_mid)  # B H N C
+                ctx_k = self.slice_to_k(slice_token_ctx)  # B H G C
+                ctx_scores = torch.matmul(ctx_q, ctx_k.transpose(-1, -2)) * self.scale  # B H N G
+            elif self.slice_attn == 'elliptic_full':
+                slice_ctx_k = self.elliptic_M(slice_token_ctx)  # B H G C
+                ctx_scores = torch.matmul(x_mid, slice_ctx_k.transpose(-1, -2)) * self.scale  # B H N G
+            else:
+                slice_ctx_k = self.elliptic_M * slice_token_ctx  # B H G C
+                ctx_scores = torch.matmul(x_mid, slice_ctx_k.transpose(-1, -2)) * self.scale  # B H N G
+            ctx_attn = self.softmax(ctx_scores)   # B H N G
+            x_ctx = torch.matmul(ctx_attn, slice_token_ctx)  # B H N C
+
+            slice_weights = self.softmax(self.in_project_slice(x_mid + x_ctx) / self.temperature)  # B H N G
+
         slice_norm = slice_weights.sum(2)  # B H G
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -102,12 +134,12 @@ class Transolver_block(nn.Module):
             last_layer=False,
             out_dim=1,
             slice_num=32,
+            slice_attn='elliptic_diag',
     ):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
-        self.Attn = Physics_Attention_Irregular_Mesh(hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-                                                     dropout=dropout, slice_num=slice_num)
+        self.Attn = Physics_Attention_Irregular_Mesh(dim=hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads, dropout=dropout, slice_num=slice_num, slice_attn=slice_attn)
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
         if self.last_layer:
@@ -125,7 +157,6 @@ class Transolver_block(nn.Module):
 
 class Model(nn.Module):
     def __init__(self,
-                 polar,
                  space_dim=1,
                  n_layers=5,
                  n_hidden=256,
@@ -137,7 +168,8 @@ class Model(nn.Module):
                  out_dim=1,
                  slice_num=32,
                  ref=8,
-                 unified_pos=False
+                 unified_pos=False,
+                 slice_attn='elliptic_diag',
                  ):
         super(Model, self).__init__()
         self.__name__ = 'UniPDE_3D'
@@ -151,10 +183,6 @@ class Model(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
-        self.polar = polar
-
-        if self.polar:
-            print("Using polar coordinates")
 
         self.blocks = nn.ModuleList([Transolver_block(num_heads=n_head, hidden_dim=n_hidden,
                                                       dropout=dropout,
@@ -162,7 +190,8 @@ class Model(nn.Module):
                                                       mlp_ratio=mlp_ratio,
                                                       out_dim=out_dim,
                                                       slice_num=slice_num,
-                                                      last_layer=(_ == n_layers - 1))
+                                                      last_layer=(_ == n_layers - 1),
+                                                      slice_attn=slice_attn)
                                      for _ in range(n_layers)])
         self.initialize_weights()
         self.placeholder = nn.Parameter((1 / (n_hidden)) * torch.rand(n_hidden, dtype=torch.float))
@@ -189,7 +218,7 @@ class Model(nn.Module):
         gridy = gridy.reshape(1, 1, self.ref, 1, 1).repeat([batchsize, self.ref, 1, self.ref, 1])
         gridz = torch.tensor(np.linspace(-4, 4, self.ref), dtype=torch.float)
         gridz = gridz.reshape(1, 1, 1, self.ref, 1).repeat([batchsize, self.ref, self.ref, 1, 1])
-        grid_ref = torch.cat((gridx, gridy, gridz), dim=-1).cuda().reshape(batchsize, self.ref ** 3, 3)  # B 4 4 4 3
+        grid_ref = torch.cat((gridx, gridy, gridz), dim=-1).to(my_pos.device).reshape(batchsize, self.ref ** 3, 3)  # B 4 4 4 3
 
         pos = torch.sqrt(
             torch.sum((my_pos[:, :, None, :] - grid_ref[:, None, :, :]) ** 2,
@@ -197,58 +226,9 @@ class Model(nn.Module):
             reshape(batchsize, my_pos.shape[1], self.ref * self.ref * self.ref).contiguous()
         return pos
 
-
-    def cartesian_to_polar(self, t):
-        #input: 7 dimensions (3 for position, 1 for sdf, 3 for normal vector)
-        #output 9 dimensions (3 for position, 1 for sdf, radius and the sin/cos of the angles theta and phi for the polar coordinates)
-        x = t[:,0]
-        y = t[:,1]
-        z = t[:,2]
-        sdf = t[:,3]
-        n_x = t[:,4]
-        n_y = t[:,5]
-        n_z = t[:,6]
-
-        #always add 1e-8 to avoid 0 radius
-        r=torch.sqrt(n_x**2+n_y**2+n_z**2)+1e-8
-        theta = torch.acos(torch.clamp(n_z/r,-1.0, 1.0))
-        phi = torch.atan2(n_y,n_x)
-
-        sin_theta=torch.sin(theta)
-        cos_theta=torch.cos(theta)
-        sin_phi=torch.sin(phi)
-        cos_phi=torch.cos(phi)
-
-        out = torch.stack((x, y, z, sdf, r, sin_theta, cos_theta,sin_phi, cos_phi), dim=1)
-
-        return out
-
-    def polar_to_cartesian(self, t):
-        #input: 6 dimensions (velocity radius, sin/cos velocity angle 1, sin/cos velocity angle 2, pressure)
-        #output 4 dimensions (velocity x, velocity y, velocity z, pressure)
-        r = t[:,0]
-        sin_theta = t[:,1]
-        cos_theta = t[:,2]
-        sin_phi = t[:,3]
-        cos_phi = t[:,4]
-        p = t[:,5]
-
-        theta=torch.atan2(sin_theta, cos_theta)
-        phi=torch.atan2(sin_phi, cos_phi)
-
-        v_x = r*torch.sin(theta)*torch.cos(phi)
-        v_y = r*torch.sin(theta)*torch.sin(phi)
-        v_z = r*torch.cos(theta)
-
-        out = torch.stack((v_x,v_y,v_z,p),dim=1)
-
-        return out    
-
     def forward(self, data):
         cfd_data, geom_data = data
         x, fx, T = cfd_data.x, None, None
-        if self.polar:
-            x=self.cartesian_to_polar(x)
         x = x[None, :, :]
         if self.unified_pos:
             new_pos = self.get_grid(cfd_data.pos[None, :, :])
@@ -264,9 +244,5 @@ class Model(nn.Module):
         for block in self.blocks:
             fx = block(fx)
 
-        output=fx[0]
-        if self.polar:
-            output=self.polar_to_cartesian(output)
-
-        return output
+        return fx[0]
 
