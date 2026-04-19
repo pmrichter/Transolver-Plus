@@ -34,7 +34,7 @@ parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--batch_size', default=1, type=int)
 parser.add_argument('--nb_epochs', default=200, type=int)
 parser.add_argument('--preprocessed', default=1, type=int)
-parser.add_argument('--slice_attn', default='elliptic_full', choices=['standard', 'elliptic_full', 'elliptic_diag', 'none'])
+parser.add_argument('--slice_attn', default='elliptic_diag', choices=['standard', 'elliptic_full', 'elliptic_diag', 'none'])
 args = parser.parse_args()
 print(args)
 
