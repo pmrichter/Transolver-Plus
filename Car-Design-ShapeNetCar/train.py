@@ -5,7 +5,9 @@ import torch.nn as nn
 
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
+import torch.nn.functional as F
 
+seed = 1
 
 def get_nb_trainable_params(model):
     '''
@@ -29,9 +31,11 @@ def train(device, model, train_loader, optimizer, scheduler, reg=1):
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
-        loss_velo_var = criterion_func(out[:, :-1], targets[:, :-1]).mean(dim=0)
+        # loss_press = F.smooth_l1_loss(out[cfd_data.surf, -1], targets[cfd_data.surf, -1], reduction='none', beta=0.01).mean(dim=0)
+        # loss_velo_var = criterion_func(out[:, :-1], targets[:, :-1]).mean(dim=0)
+        loss_velo_var = F.smooth_l1_loss(out[:, :-1], targets[:, :-1], reduction='none', beta=0.01).mean(dim=0)
         loss_velo = loss_velo_var.mean()
-        total_loss = loss_velo + reg * loss_press
+        total_loss = loss_velo + reg * loss_press #+ 0.1 * model.get_ortho_loss()
 
         total_loss.backward()
 
@@ -76,13 +80,39 @@ class NumpyEncoder(json.JSONEncoder):
 
 def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=hparams['lr'])
+
+    # ==========================================================
+    # 1. PARAMETER GROUPING (The Anti-Overfitting Fix)
+    # ==========================================================
+    velo_params = []
+    press_params = []
+
+    for name, param in model.named_parameters():
+        if 'velo' in name:
+            velo_params.append(param)
+        else:
+            press_params.append(param)
+
+    # ==========================================================
+    # 2. ADAM-W OPTIMIZER WITH TARGETED DECAY
+    # ==========================================================
+    # Velocity gets a gentle pull to stop memorizing the wake.
+    # Pressure stays at 0.0 to learn the sharp boundary conditions perfectly.
+    optimizer = torch.optim.AdamW([
+        {'params': velo_params, 'weight_decay': 0.0},
+        {'params': press_params, 'weight_decay': 0.0}
+    ], lr=hparams['lr'])
+
+    # ==========================================================
+    # 3. LEARNING RATE SCHEDULER (Unchanged)
+    # ==========================================================
     lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=hparams['lr'],
         total_steps=(len(train_dataset) // hparams['batch_size'] + 1) * hparams['nb_epochs'],
         final_div_factor=1000.,
     )
+
     start = time.time()
 
     train_loss, val_loss = 1e5, 1e5
@@ -90,7 +120,7 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     for epoch in pbar_train:
         train_loader = DataLoader(train_dataset, batch_size=hparams['batch_size'], shuffle=True, drop_last=True)
         loss_velo, loss_press = train(device, model, train_loader, optimizer, lr_scheduler, reg=reg)
-        train_loss = loss_velo + reg * loss_press
+        train_loss = loss_velo + reg * loss_press #+ 0.1 * model.get_ortho_loss().item()
         del (train_loader)
 
         if val_iter is not None and (epoch == hparams['nb_epochs'] - 1 or epoch % val_iter == 0):
@@ -100,7 +130,11 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
             val_loss = loss_velo + reg * loss_press
             del (val_loader)
 
-            pbar_train.set_postfix(train_loss=train_loss, val_loss=val_loss)
+            pbar_train.set_postfix(train_loss=train_loss, val_loss=val_loss, val_velo=loss_velo, val_press=loss_press)
+            print("train_loss: ", train_loss, "val_loss: ", val_loss, "loss_velo: ", loss_velo, "loss_press: ", loss_press)
+            if epoch > 120:
+                torch.save(model, path + os.sep + f'model_{epoch}_hyperspherical_400_l1_{seed}.pth')
+
         else:
             pbar_train.set_postfix(train_loss=train_loss)
 
@@ -109,10 +143,10 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     params_model = get_nb_trainable_params(model).astype('float')
     print('Number of parameters:', params_model)
     print('Time elapsed: {0:.2f} seconds'.format(time_elapsed))
-    torch.save(model, path + os.sep + f'model_{hparams["nb_epochs"]}.pth')
+    torch.save(model, path + os.sep + f'model_{hparams["nb_epochs"]}_hyperspherical_400_l1_{seed}.pth')
 
     if val_iter is not None:
-        with open(path + os.sep + f'log_{hparams["nb_epochs"]}.json', 'a') as f:
+        with open(path + os.sep + f'log_{hparams["nb_epochs"]}_hyperspherical_400_l1_{seed}.json', 'a') as f:
             json.dump(
                 {
                     'nb_parameters': params_model,
