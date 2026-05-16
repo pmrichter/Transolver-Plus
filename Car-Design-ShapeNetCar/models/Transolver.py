@@ -24,7 +24,7 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         for l in [self.in_project_slice]:
-            torch.nn.init.orthogonal_(l.weight) # use a principled initialization
+            torch.nn.init.orthogonal_(l.weight)  # use a principled initialization
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -248,7 +248,7 @@ class Model(nn.Module):
             fx = fx + self.placeholder[None, None, :]
 
         for block in self.blocks:
-          fx = block(fx)
+            fx = block(fx)
 
         fx = self.ln_final(fx) # [1, N, d]
 
