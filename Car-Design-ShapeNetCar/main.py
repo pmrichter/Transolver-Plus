@@ -21,7 +21,7 @@ parser.add_argument('--weight', default=0.5, type=float)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--batch_size', default=1, type=int)
 parser.add_argument('--nb_epochs', default=1, type=int)
-parser.add_argument('--preprocessed', default=0, type=int)
+parser.add_argument('--preprocessed', default=1, type=int)
 args = parser.parse_args()
 print(args)
 
