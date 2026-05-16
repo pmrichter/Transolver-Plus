@@ -8,8 +8,8 @@ from dataset.dataset import GraphDataset
 from models.Transolver import Model
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', default='/data/PDE_data/mlcfd_data/training_data')
-parser.add_argument('--save_dir', default='/data/PDE_data/mlcfd_data/preprocessed_data')
+parser.add_argument('--data_dir', default='../mlcfd_data/training_data')
+parser.add_argument('--save_dir', default='../mlcfd_data/preprocessed_data')
 parser.add_argument('--fold_id', default=0, type=int)
 parser.add_argument('--gpu', default=0, type=int)
 parser.add_argument('--val_iter', default=10, type=int)
@@ -20,16 +20,26 @@ parser.add_argument('--r', default=0.2, type=float)
 parser.add_argument('--weight', default=0.5, type=float)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--batch_size', default=1, type=int)
-parser.add_argument('--nb_epochs', default=200, type=int)
-parser.add_argument('--preprocessed', default=1, type=int)
+parser.add_argument('--nb_epochs', default=1, type=int)
+parser.add_argument('--preprocessed', default=0, type=int)
 args = parser.parse_args()
 print(args)
 
-hparams = {'lr': args.lr, 'batch_size': args.batch_size, 'nb_epochs': args.nb_epochs}
+def get_device(selected_gpu):
+    device = None
+    if torch.cuda.is_available() and 0 <= selected_gpu < torch.cuda.device_count():
+        device = f'cuda:{selected_gpu}'
+    elif torch.backends.mps.is_available():
+        device= 'mps'
+    else:
+        device='cpu'
+    print(f"Using device: {device}")
 
-n_gpu = torch.cuda.device_count()
-use_cuda = 0 <= args.gpu < n_gpu and torch.cuda.is_available()
-device = torch.device(f'cuda:{args.gpu}' if use_cuda else 'cpu')
+    return torch.device(device)
+
+device = get_device(args.gpu)
+
+hparams = {'lr': args.lr, 'batch_size': args.batch_size, 'nb_epochs': args.nb_epochs}
 
 train_data, val_data, coef_norm = load_train_val_fold(args, preprocessed=args.preprocessed)
 train_ds = GraphDataset(train_data, use_cfd_mesh=args.cfd_mesh, r=args.r)

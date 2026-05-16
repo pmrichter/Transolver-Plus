@@ -12,28 +12,37 @@ from dataset.dataset import GraphDataset
 import scipy as sc
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', default='/data/PDE_data/mlcfd_data/training_data')
-parser.add_argument('--save_dir', default='/data/PDE_data/mlcfd_data/preprocessed_data')
+parser.add_argument('--data_dir', default='../mlcfd_data/training_data')
+parser.add_argument('--save_dir', default='../mlcfd_data/preprocessed_data')
 parser.add_argument('--fold_id', default=0, type=int)
 parser.add_argument('--gpu', default=0, type=int)
-parser.add_argument('--cfd_model')
+parser.add_argument('--cfd_model', default='Transolver')
 parser.add_argument('--cfd_mesh', action='store_true')
 parser.add_argument('--r', default=0.2, type=float)
 parser.add_argument('--weight', default=0.5, type=float)
-parser.add_argument('--nb_epochs', default=200, type=float)
+parser.add_argument('--nb_epochs', default=1, type=float)
 args = parser.parse_args()
 print(args)
 
+def get_device(selected_gpu):
+    device = None
+    if torch.cuda.is_available() and 0 <= selected_gpu < torch.cuda.device_count():
+        device = f'cuda:{selected_gpu}'
+    elif torch.backends.mps.is_available():
+        device= 'mps'
+    else:
+        device='cpu'
+    print(f"Using device: {device}")
 
-n_gpu = torch.cuda.device_count()
-use_cuda = 0 <= args.gpu < n_gpu and torch.cuda.is_available()
-device = torch.device(f'cuda:{args.gpu}' if use_cuda else 'cpu')
+    return torch.device(device)
+
+device = get_device(args.gpu)
 
 train_data, val_data, coef_norm, vallst = load_train_val_fold_file(args, preprocessed=True)
 val_ds = GraphDataset(val_data, use_cfd_mesh=args.cfd_mesh, r=args.r)
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
-model = torch.load(os.path.join(path, f'model_{args.nb_epochs}.pth')).to(device)
+model = torch.load(os.path.join(path, f'model_{args.nb_epochs}.pth'), weights_only=False).to(device)
 
 test_loader = DataLoader(val_ds, batch_size=1)
 
@@ -62,8 +71,8 @@ with torch.no_grad():
         targets = cfd_data.y
 
         if coef_norm is not None:
-            mean = torch.tensor(coef_norm[2]).to(device)
-            std = torch.tensor(coef_norm[3]).to(device)
+            mean = torch.tensor(coef_norm[2], dtype=torch.float32).to(device)
+            std = torch.tensor(coef_norm[3], dtype=torch.float32).to(device)
             pred_press = out[cfd_data.surf, -1] * std[-1] + mean[-1]
             gt_press = targets[cfd_data.surf, -1] * std[-1] + mean[-1]
             pred_surf_velo = out[cfd_data.surf, :-1] * std[:-1] + mean[:-1]

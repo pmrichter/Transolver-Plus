@@ -184,7 +184,7 @@ class Model(nn.Module):
         gridy = gridy.reshape(1, 1, self.ref, 1, 1).repeat([batchsize, self.ref, 1, self.ref, 1])
         gridz = torch.tensor(np.linspace(-4, 4, self.ref), dtype=torch.float)
         gridz = gridz.reshape(1, 1, 1, self.ref, 1).repeat([batchsize, self.ref, self.ref, 1, 1])
-        grid_ref = torch.cat((gridx, gridy, gridz), dim=-1).cuda().reshape(batchsize, self.ref ** 3, 3)  # B 4 4 4 3
+        grid_ref = torch.cat((gridx, gridy, gridz), dim=-1).to(my_pos.device).reshape(batchsize, self.ref ** 3, 3)  # B 4 4 4 3
 
         pos = torch.sqrt(
             torch.sum((my_pos[:, :, None, :] - grid_ref[:, None, :, :]) ** 2,
