@@ -51,7 +51,7 @@ if args.cfd_model == 'Transolver':
                   n_head=8,
                   mlp_ratio=2, out_dim=4,
                   slice_num=32,
-                  unified_pos=0).cuda()
+                  unified_pos=0).to(device)
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 if not os.path.exists(path):
