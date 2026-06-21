@@ -5,7 +5,7 @@ import argparse
 
 from dataset.load_dataset import load_train_val_fold
 from dataset.dataset import GraphDataset
-from models.Transolver import Model
+from models.Transolver import Model, ATTENTION_FUNCTIONS
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data_dir', default='./mlcfd_data/training_data')
@@ -22,6 +22,7 @@ parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--batch_size', default=1, type=int)
 parser.add_argument('--nb_epochs', default=1, type=int)
 parser.add_argument('--preprocessed', default=1, type=int)
+parser.add_argument('--attn_type', default='dot_product', choices=list(ATTENTION_FUNCTIONS.keys()))
 args = parser.parse_args()
 print(args)
 
@@ -51,6 +52,7 @@ if args.cfd_model == 'Transolver':
                   n_head=8,
                   mlp_ratio=2, out_dim=4,
                   slice_num=32,
+                  attn_type=args.attn_type,
                   unified_pos=0).to(device)
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'

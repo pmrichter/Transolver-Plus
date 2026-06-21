@@ -4,13 +4,121 @@ import torch.nn as nn
 from timm.models.layers import trunc_normal_
 from einops import rearrange, repeat
 import math
+import torch.nn.functional as F
 
 ACTIVATION = {'gelu': nn.GELU, 'tanh': nn.Tanh, 'sigmoid': nn.Sigmoid, 'relu': nn.ReLU, 'leaky_relu': nn.LeakyReLU(0.1),
               'softplus': nn.Softplus, 'ELU': nn.ELU, 'silu': nn.SiLU}
 
 
+class DotProductAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, q, k, v):
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        attn = self.dropout(torch.softmax(dots, dim=-1))
+        return torch.matmul(attn, v)
+
+class MahalanobisAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.dropout = nn.Dropout(dropout)
+        self.L = nn.Parameter(torch.eye(dim_head).unsqueeze(0).repeat(heads, 1, 1)) # H D D
+
+    def forward(self, q, k, v):
+        qL = torch.einsum('bhgd,hde->bhge', q, self.L)
+        kL = torch.einsum('bhgd,hde->bhge', k, self.L)
+        dots = torch.matmul(qL, kL.transpose(-1, -2)) * self.scale
+        attn = self.dropout(torch.softmax(dots, dim=-1))
+        return torch.matmul(attn, v)
+
+class GaussianAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.log_sigma = nn.Parameter(torch.zeros(1, heads, 1, 1))
+
+    def forward(self, q, k, v):
+        q_sq = (q * q).sum(-1, keepdim=True) # B H G 1
+        k_sq = (k * k).sum(-1).unsqueeze(-2) # B H 1 G
+        dist_sq = q_sq + k_sq - 2 * torch.matmul(q, k.transpose(-1, -2))
+        sigma_sq = torch.exp(2 * self.log_sigma)
+        scores = -dist_sq / (2 * sigma_sq + 1e-6)
+        attn = self.dropout(torch.softmax(scores, dim=-1))
+        return torch.matmul(attn, v)
+
+class BilinearAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.dropout = nn.Dropout(dropout)
+        self.W = nn.Parameter(torch.eye(dim_head).unsqueeze(0).repeat(heads, 1, 1)) # H D D
+
+    def forward(self, q, k, v):
+        Wk = torch.einsum('hde,bhge->bhgd', self.W, k)    # W k
+        dots = torch.matmul(q, Wk.transpose(-1, -2)) * self.scale
+        attn = self.dropout(torch.softmax(dots, dim=-1))
+        return torch.matmul(attn, v)
+
+class LinearAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+    @staticmethod
+    def feature_map(x):
+        return F.elu(x) + 1
+
+    def forward(self, q, k, v):
+        qf = self.feature_map(q) # B H G D
+        kf = self.feature_map(k) # B H G D
+        kv = torch.einsum('bhgd,bhge->bhde', kf, v) # B H D D
+        z = 1.0 / (torch.einsum('bhgd,bhd->bhg', qf, kf.sum(dim=2)) + 1e-6)
+        out = torch.einsum('bhgd,bhde->bhge', qf, kv) * z.unsqueeze(-1)
+        return self.dropout(out)
+
+
+class MixtureAttention(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0., n_mix=4):
+        super().__init__()
+        self.scale = dim_head ** -0.5
+        self.dropout = nn.Dropout(dropout)
+        self.n_mix = n_mix
+        self.Wk = nn.Parameter(
+            torch.eye(dim_head).reshape(1, 1, dim_head, dim_head).repeat(heads, n_mix, 1, 1)
+        )  # H K D D
+        self.gate = nn.Linear(dim_head, n_mix)
+
+    def forward(self, q, k, v):
+        Wk = torch.einsum('hkde,bhge->bhkgd', self.Wk, k) # B H K G D
+        dots = torch.einsum('bhid,bhkjd->bhkij', q, Wk) * self.scale
+        comp = torch.softmax(dots, dim=-1) # B H K G G
+        pi = torch.softmax(self.gate(q), dim=-1) # B H G K
+        pi = pi.permute(0, 1, 3, 2).unsqueeze(-1) # B H K G 1
+        attn = (pi * comp).sum(dim=2) # B H G G
+        attn = self.dropout(attn)
+        return torch.matmul(attn, v)
+
+ATTENTION_FUNCTIONS = {
+    'dot_product': DotProductAttention,
+    'mahalanobis': MahalanobisAttention,
+    'gaussian': GaussianAttention,
+    'bilinear': BilinearAttention,
+    'linear': LinearAttention,
+    'mixture': MixtureAttention
+}
+def build_attention(attn_type, heads, dim_head, slice_num, dropout=0.):
+    if attn_type not in ATTENTION_FUNCTIONS:
+        raise ValueError(
+            f"Unknown attn_type '{attn_type}'. Choose from {list(ATTENTION_FUNCTIONS)}"
+        )
+    return ATTENTION_FUNCTIONS[attn_type](heads, dim_head, slice_num, dropout=dropout)
+
 class Physics_Attention_Irregular_Mesh(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0., slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0., slice_num=64, attn_type='dot_product'):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -19,6 +127,7 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.attn_type = attn_type
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -32,7 +141,8 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
             nn.Linear(inner_dim, dim),
             nn.Dropout(dropout)
         )
-
+        self.attn = build_attention(attn_type, heads, dim_head, slice_num, dropout=dropout)
+        
         self.slice_num = slice_num
         self.cluster_centers = nn.Parameter(torch.empty(self.heads, self.slice_num, self.dim_head))
         nn.init.orthogonal_(self.cluster_centers)
@@ -81,8 +191,7 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         attn = self.softmax(dots)
         attn = self.dropout(attn)
 
-        # out_slice_token = torch.matmul(attn, v_slice_token) # B H G D
-        slice_token = res + torch.matmul(attn, v_slice_token) # B H G D
+        slice_token = res + self.attn(q_slice_token, k_slice_token, v_slice_token) # B H G D
         res = slice_token
         out_slice_token = res + self.slice_mlp(self.slice_norm2(slice_token))
 
@@ -111,12 +220,12 @@ class MLP(nn.Module):
 
 class Transolver_block(nn.Module):
     def __init__(self, num_heads: int, hidden_dim: int, dropout: float, act='gelu', mlp_ratio=4, last_layer=False,
-        out_dim=1, slice_num=32):
+        out_dim=1, slice_num=32, attn_type='dot_product'):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.Attn = Physics_Attention_Irregular_Mesh(hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-                                                     dropout=dropout, slice_num=slice_num)
+                                                     dropout=dropout, slice_num=slice_num, attn_type=attn_type)
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
 
@@ -128,7 +237,7 @@ class Transolver_block(nn.Module):
 
 class Model(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0, n_head=8, act='gelu', mlp_ratio=1, fun_dim=1,
-         out_dim=4, slice_num=32, ref=8, unified_pos=False):
+         out_dim=4, slice_num=32, ref=8, unified_pos=False, attn_type='dot_product'):
         super(Model, self).__init__()
         self.__name__ = 'UniPDE_3D_TripleHead'
         self.ref = ref
@@ -144,7 +253,7 @@ class Model(nn.Module):
         self.space_dim = space_dim
 
         self.blocks = nn.ModuleList([Transolver_block(num_heads=n_head, hidden_dim=n_hidden, dropout=dropout, act=act,
-                            mlp_ratio=mlp_ratio, out_dim=out_dim, slice_num=slice_num,
+                            mlp_ratio=mlp_ratio, out_dim=out_dim, slice_num=slice_num, attn_type=attn_type,
                             last_layer=(_ == n_layers - 1)) for _ in range(n_layers)])
 
         self.ln_final = nn.LayerNorm(n_hidden)
