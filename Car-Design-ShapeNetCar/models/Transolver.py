@@ -248,6 +248,7 @@ class Model(nn.Module):
         self.__name__ = 'UniPDE_3D_TripleHead'
         self.ref = ref
         self.unified_pos = unified_pos
+        self.attn_type = attn_type
 
         # ENTRANCE: Add +1 to fun_dim to account for the binary "is_surface" indicator
         if self.unified_pos:
