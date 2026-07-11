@@ -354,7 +354,8 @@ class Model(nn.Module):
         # Append the indicator to the node features
         x = torch.cat((x, is_surf_feature), dim=-1)
         x = x[None, :, :]
-        x=x.half()
+        if next(self.parameters()).dtype == torch.float16:
+            x=x.half()
 
         if self.unified_pos:
             new_pos = self.get_grid(cfd_data.pos[None, :, :])
