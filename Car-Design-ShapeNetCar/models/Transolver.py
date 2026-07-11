@@ -354,6 +354,7 @@ class Model(nn.Module):
         # Append the indicator to the node features
         x = torch.cat((x, is_surf_feature), dim=-1)
         x = x[None, :, :]
+        x=x.half()
 
         if self.unified_pos:
             new_pos = self.get_grid(cfd_data.pos[None, :, :])
@@ -371,7 +372,7 @@ class Model(nn.Module):
 
         fx = self.ln_final(fx) # [1, N, d]
 
-        out = torch.zeros(1, fx.shape[1], 4, device=fx.device)
+        out = torch.zeros(1, fx.shape[1], 4, device=fx.device, dtype=torch.float16)
 
         out[0, ~surf_mask, 0:1] = self.head_vol_u(fx[0, ~surf_mask, :])
         out[0, ~surf_mask, 1:2] = self.head_vol_v(fx[0, ~surf_mask, :])
