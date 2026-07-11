@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 seed = 1
 
@@ -17,7 +18,7 @@ def get_nb_trainable_params(model):
     return sum([np.prod(p.size()) for p in model_parameters])
 
 
-def train(device, model, train_loader, optimizer, scheduler, reg=1):
+def train(device, model, train_loader, optimizer, scheduler, use_flash_attention, reg=1):
     model.train()
 
     criterion_func = nn.MSELoss(reduction='none')
@@ -27,7 +28,14 @@ def train(device, model, train_loader, optimizer, scheduler, reg=1):
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
         optimizer.zero_grad()
-        out = model((cfd_data, geom))
+        out=None
+        if use_flash_attention:
+            with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                out = model((cfd_data, geom))
+                print("using flash attention")
+        else:
+            out = model((cfd_data, geom))
+            print("not using flash attention")
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
@@ -80,6 +88,11 @@ class NumpyEncoder(json.JSONEncoder):
 
 def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
+    use_flash_attention=False
+    if device=="cuda" and hparams['attn_type']=='dot_product_flash':
+        use_flash_attention=True
+        model=model.half()
+        print("Using half precision for flash attention")
 
     # ==========================================================
     # 1. PARAMETER GROUPING (The Anti-Overfitting Fix)
@@ -119,7 +132,7 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     pbar_train = tqdm(range(hparams['nb_epochs']), position=0)
     for epoch in pbar_train:
         train_loader = DataLoader(train_dataset, batch_size=hparams['batch_size'], shuffle=True, drop_last=True)
-        loss_velo, loss_press = train(device, model, train_loader, optimizer, lr_scheduler, reg=reg)
+        loss_velo, loss_press = train(device, model, train_loader, optimizer, lr_scheduler, use_flash_attention=use_flash_attention, reg=reg)
         train_loss = loss_velo + reg * loss_press #+ 0.1 * model.get_ortho_loss().item()
         del (train_loader)
 
