@@ -54,6 +54,9 @@ if args.cfd_model == 'Transolver':
                   slice_num=32,
                   attn_type=args.attn_type,
                   unified_pos=0).to(device)
+    if args.attn_type == 'dot_product_flash':
+        # CUDA flash SDPA kernels require fp16/bf16 inputs
+        model = model.half()
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 if not os.path.exists(path):

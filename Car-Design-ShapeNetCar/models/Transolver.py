@@ -5,6 +5,7 @@ from timm.models.layers import trunc_normal_
 from einops import rearrange, repeat
 import math
 import torch.nn.functional as F
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 ACTIVATION = {'gelu': nn.GELU, 'tanh': nn.Tanh, 'sigmoid': nn.Sigmoid, 'relu': nn.ReLU, 'leaky_relu': nn.LeakyReLU(0.1),
               'softplus': nn.Softplus, 'ELU': nn.ELU, 'silu': nn.SiLU}
@@ -24,10 +25,12 @@ class DotProductAttention(nn.Module):
 class DotProductAttentionFlash(nn.Module):
     def __init__(self, heads, dim_head, slice_num, dropout=0.):
         super().__init__()
+        self.dropout_p = dropout
 
     def forward(self, q, k, v):
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        return out
+        dropout_p = getattr(self, 'dropout_p', 0.) if self.training else 0.
+        with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            return F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, is_causal=True)
 
 class MahalanobisAttention(nn.Module):
     def __init__(self, heads, dim_head, slice_num, dropout=0.):

@@ -22,20 +22,16 @@ def train(device, model, train_loader, optimizer, scheduler, use_flash_attention
     model.train()
 
     criterion_func = nn.MSELoss(reduction='none')
+    model_dtype = next(model.parameters()).dtype
     losses_press = []
     losses_velo = []
     for cfd_data, geom in train_loader:
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
+        if model_dtype == torch.float16: 
+            cfd_data.x = cfd_data.x.half()
         optimizer.zero_grad()
-        out=None
-        if use_flash_attention:
-            with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-                out = model((cfd_data, geom))
-                print("using flash attention")
-        else:
-            out = model((cfd_data, geom))
-            print("not using flash attention")
+        out = model((cfd_data, geom)).float() 
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
@@ -61,12 +57,15 @@ def test(device, model, test_loader):
     model.eval()
 
     criterion_func = nn.MSELoss(reduction='none')
+    model_dtype = next(model.parameters()).dtype
     losses_press = []
     losses_velo = []
     for cfd_data, geom in test_loader:
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
-        out = model((cfd_data, geom))
+        if model_dtype == torch.float16:
+            cfd_data.x = cfd_data.x.half()
+        out = model((cfd_data, geom)).float()
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
@@ -113,10 +112,11 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     # ==========================================================
     # Velocity gets a gentle pull to stop memorizing the wake.
     # Pressure stays at 0.0 to learn the sharp boundary conditions perfectly.
+    adam_eps = 1e-4 if next(model.parameters()).dtype == torch.float16 else 1e-8
     optimizer = torch.optim.AdamW([
         {'params': velo_params, 'weight_decay': 0.0},
         {'params': press_params, 'weight_decay': 0.0}
-    ], lr=hparams['lr'])
+    ], lr=hparams['lr'], eps=adam_eps)
 
     # ==========================================================
     # 3. LEARNING RATE SCHEDULER (Unchanged)
