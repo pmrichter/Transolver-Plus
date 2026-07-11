@@ -86,11 +86,15 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def main(device, train_dataset, val_dataset, Net, hparams, path, use_flash_attention, reg=1, val_iter=1, coef_norm=[]):
+def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
-    if use_flash_attention:
+    use_flash_attention=False
+    if device.type=="cuda" and model.attn_type=='dot_product_flash':
         model=model.half()
+        use_flash_attention=True
         print("Using half precision for flash attention")
+    else:
+        print("Using full precision")
 
     # ==========================================================
     # 1. PARAMETER GROUPING (The Anti-Overfitting Fix)

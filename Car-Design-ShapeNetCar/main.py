@@ -26,13 +26,10 @@ parser.add_argument('--attn_type', default='dot_product', choices=list(ATTENTION
 args = parser.parse_args()
 print(args)
 
-use_flash_attention=False
-
 def get_device(selected_gpu):
     device = None
     if torch.cuda.is_available() and 0 <= selected_gpu < torch.cuda.device_count():
         device = f'cuda:{selected_gpu}'
-        use_flash_attention =  (args.attn_type=='dot_product_flash')
     elif torch.backends.mps.is_available():
         device= 'mps'
     else:
@@ -62,5 +59,4 @@ path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 if not os.path.exists(path):
     os.makedirs(path)
 
-model = train.main(device, train_ds, val_ds, model, hparams, path, use_flash_attention=use_flash_attention, val_iter=args.val_iter, reg=args.weight,
-                   coef_norm=coef_norm)
+model = train.main(device, train_ds, val_ds, model, hparams, path, val_iter=args.val_iter, reg=args.weight, coef_norm=coef_norm)
