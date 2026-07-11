@@ -32,7 +32,7 @@ def get_device(selected_gpu):
     device = None
     if torch.cuda.is_available() and 0 <= selected_gpu < torch.cuda.device_count():
         device = f'cuda:{selected_gpu}'
-        use_flash_attention =  (hparams['attn_type']=='dot_product_flash')
+        use_flash_attention =  (args.attn_type=='dot_product_flash')
     elif torch.backends.mps.is_available():
         device= 'mps'
     else:
