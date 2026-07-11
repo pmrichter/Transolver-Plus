@@ -21,6 +21,14 @@ class DotProductAttention(nn.Module):
         attn = self.dropout(torch.softmax(dots, dim=-1))
         return torch.matmul(attn, v)
 
+class DotProductAttentionFlash(nn.Module):
+    def __init__(self, heads, dim_head, slice_num, dropout=0.):
+        super().__init__()
+
+    def forward(self, q, k, v):
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return out
+
 class MahalanobisAttention(nn.Module):
     def __init__(self, heads, dim_head, slice_num, dropout=0.):
         super().__init__()
@@ -104,6 +112,7 @@ class MixtureAttention(nn.Module):
 
 ATTENTION_FUNCTIONS = {
     'dot_product': DotProductAttention,
+    'dot_product_flash': DotProductAttentionFlash,
     'mahalanobis': MahalanobisAttention,
     'gaussian': GaussianAttention,
     'bilinear': BilinearAttention,
