@@ -30,7 +30,7 @@ class DotProductAttentionFlash(nn.Module):
     def forward(self, q, k, v):
         dropout_p = getattr(self, 'dropout_p', 0.) if self.training else 0.
         with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
-            return F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, is_causal=True)
+            return F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, is_causal=False)
 
 class MahalanobisAttention(nn.Module):
     def __init__(self, heads, dim_head, slice_num, dropout=0.):
