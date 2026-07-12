@@ -46,6 +46,8 @@ val_ds = GraphDataset(val_data, use_cfd_mesh=args.cfd_mesh, r=args.r)
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 model = torch.load(os.path.join(path, f'model_{args.nb_epochs}_hyperspherical_400_l1_{seed}.pth'), weights_only=False).to(device)
 
+use_ampere = getattr(model, 'attn_type', None) == 'dot_product_flash' and device.type=="cuda"
+
 test_loader = DataLoader(val_ds, batch_size=1)
 
 if not os.path.exists('./results/' + args.cfd_model + '/'):
@@ -68,7 +70,9 @@ with torch.no_grad():
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
         tic = time.time()
-        out = model((cfd_data, geom))
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_ampere):
+            out = model((cfd_data, geom))
+        out = out.float()
         toc = time.time()
         targets = cfd_data.y
 

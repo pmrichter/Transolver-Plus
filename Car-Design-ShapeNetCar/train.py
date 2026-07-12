@@ -18,20 +18,19 @@ def get_nb_trainable_params(model):
     return sum([np.prod(p.size()) for p in model_parameters])
 
 
-def train(device, model, train_loader, optimizer, scheduler, use_flash_attention, reg=1):
+def train(device, model, train_loader, optimizer, scheduler, use_ampere, reg=1):
     model.train()
 
     criterion_func = nn.MSELoss(reduction='none')
-    model_dtype = next(model.parameters()).dtype
     losses_press = []
     losses_velo = []
     for cfd_data, geom in train_loader:
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
-        if model_dtype == torch.float16: 
-            cfd_data.x = cfd_data.x.half()
         optimizer.zero_grad()
-        out = model((cfd_data, geom)).float() 
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_ampere):
+            out = model((cfd_data, geom))
+        out = out.float()
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
@@ -53,19 +52,18 @@ def train(device, model, train_loader, optimizer, scheduler, use_flash_attention
 
 
 @torch.no_grad()
-def test(device, model, test_loader):
+def test(device, model, test_loader, use_ampere=False):
     model.eval()
 
     criterion_func = nn.MSELoss(reduction='none')
-    model_dtype = next(model.parameters()).dtype
     losses_press = []
     losses_velo = []
     for cfd_data, geom in test_loader:
         cfd_data = cfd_data.to(device)
         geom = geom.to(device)
-        if model_dtype == torch.float16:
-            cfd_data.x = cfd_data.x.half()
-        out = model((cfd_data, geom)).float()
+        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_ampere):
+            out = model((cfd_data, geom))
+        out = out.float()
         targets = cfd_data.y
 
         loss_press = criterion_func(out[cfd_data.surf, -1], targets[cfd_data.surf, -1]).mean(dim=0)
@@ -87,11 +85,9 @@ class NumpyEncoder(json.JSONEncoder):
 
 def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
-    use_flash_attention=False
-    if device.type=="cuda" and model.attn_type=='dot_product_flash':
-        model=model.half()
-        use_flash_attention=True
-        print("Using half precision for flash attention")
+    use_ampere = model.attn_type == 'dot_product_flash'
+    if use_ampere:
+        print("Using bf16 autocast for flash attention")
     else:
         print("Using full precision")
 
@@ -112,7 +108,7 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     # ==========================================================
     # Velocity gets a gentle pull to stop memorizing the wake.
     # Pressure stays at 0.0 to learn the sharp boundary conditions perfectly.
-    adam_eps = 1e-4 if next(model.parameters()).dtype == torch.float16 else 1e-8
+    adam_eps = 1e-8
     optimizer = torch.optim.AdamW([
         {'params': velo_params, 'weight_decay': 0.0},
         {'params': press_params, 'weight_decay': 0.0}
@@ -134,14 +130,14 @@ def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter
     pbar_train = tqdm(range(hparams['nb_epochs']), position=0)
     for epoch in pbar_train:
         train_loader = DataLoader(train_dataset, batch_size=hparams['batch_size'], shuffle=True, drop_last=True)
-        loss_velo, loss_press = train(device, model, train_loader, optimizer, lr_scheduler, use_flash_attention=use_flash_attention, reg=reg)
+        loss_velo, loss_press = train(device, model, train_loader, optimizer, lr_scheduler, use_ampere=use_ampere, reg=reg)
         train_loss = loss_velo + reg * loss_press #+ 0.1 * model.get_ortho_loss().item()
         del (train_loader)
 
         if val_iter is not None and (epoch == hparams['nb_epochs'] - 1 or epoch % val_iter == 0):
             val_loader = DataLoader(val_dataset, batch_size=1)
 
-            loss_velo, loss_press = test(device, model, val_loader)
+            loss_velo, loss_press = test(device, model, val_loader, use_ampere=use_ampere)
             val_loss = loss_velo + reg * loss_press
             del (val_loader)
 

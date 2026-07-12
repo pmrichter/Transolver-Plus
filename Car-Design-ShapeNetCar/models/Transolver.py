@@ -379,14 +379,14 @@ class Model(nn.Module):
         else:
             out = torch.zeros(1, fx.shape[1], 4, device=fx.device)
 
-        out[0, ~surf_mask, 0:1] = self.head_vol_u(fx[0, ~surf_mask, :])
-        out[0, ~surf_mask, 1:2] = self.head_vol_v(fx[0, ~surf_mask, :])
-        out[0, ~surf_mask, 2:3] = self.head_vol_w(fx[0, ~surf_mask, :])
+        out[0, ~surf_mask, 0:1] = self.head_vol_u(fx[0, ~surf_mask, :]).to(out.dtype)
+        out[0, ~surf_mask, 1:2] = self.head_vol_v(fx[0, ~surf_mask, :]).to(out.dtype)
+        out[0, ~surf_mask, 2:3] = self.head_vol_w(fx[0, ~surf_mask, :]).to(out.dtype)
 
-        out[0, surf_mask, 0:1] = self.head_surf_u(fx[0, surf_mask, :])
-        out[0, surf_mask, 1:2] = self.head_surf_v(fx[0, surf_mask, :])
-        out[0, surf_mask, 2:3] = self.head_surf_w(fx[0, surf_mask, :])
+        out[0, surf_mask, 0:1] = self.head_surf_u(fx[0, surf_mask, :]).to(out.dtype)
+        out[0, surf_mask, 1:2] = self.head_surf_v(fx[0, surf_mask, :]).to(out.dtype)
+        out[0, surf_mask, 2:3] = self.head_surf_w(fx[0, surf_mask, :]).to(out.dtype)
 
-        out[0, surf_mask, 3:4] = self.head_surf_press(fx[0, surf_mask, :])
+        out[0, surf_mask, 3:4] = self.head_surf_press(fx[0, surf_mask, :]).to(out.dtype)
 
         return out[0]
