@@ -8,6 +8,9 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+# Allow high precision calculation on Ampere architecture. Does not affect MPS on Mac.
+torch.set_float32_matmul_precision('high')
+
 seed = 1
 
 def get_nb_trainable_params(model):
@@ -85,7 +88,7 @@ class NumpyEncoder(json.JSONEncoder):
 
 def main(device, train_dataset, val_dataset, Net, hparams, path, reg=1, val_iter=1, coef_norm=[]):
     model = Net.to(device)
-    use_ampere = model.attn_type == 'dot_product_flash'
+    use_ampere = model.attn_type == 'dot_product_flash' and device.type == 'cuda'
     if use_ampere:
         print("Using bf16 autocast for flash attention")
     else:

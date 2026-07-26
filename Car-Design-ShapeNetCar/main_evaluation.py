@@ -11,6 +11,9 @@ from dataset.load_dataset import load_train_val_fold_file
 from dataset.dataset import GraphDataset
 import scipy as sc
 
+# Allow high precision calculation on Ampere architecture. Does not affect MPS on Mac.
+torch.set_float32_matmul_precision('high')
+
 seed=1
 
 parser = argparse.ArgumentParser()
