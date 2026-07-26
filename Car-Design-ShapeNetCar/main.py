@@ -38,8 +38,6 @@ def get_device(selected_gpu):
 
     return torch.device(device)
 
-device = get_device(args.gpu)
-
 hparams = {'lr': args.lr, 'batch_size': args.batch_size, 'nb_epochs': args.nb_epochs}
 
 train_data, val_data, coef_norm = load_train_val_fold(args, preprocessed=args.preprocessed)
@@ -53,10 +51,10 @@ if args.cfd_model == 'Transolver':
                   mlp_ratio=2, out_dim=4,
                   slice_num=32,
                   attn_type=args.attn_type,
-                  unified_pos=0).to(device)
+                  unified_pos=0)
 
 path = f'metrics/{args.cfd_model}/{args.fold_id}/{args.nb_epochs}_{args.weight}'
 if not os.path.exists(path):
     os.makedirs(path)
 
-model = train.main(device, train_ds, val_ds, model, hparams, path, val_iter=args.val_iter, reg=args.weight, coef_norm=coef_norm)
+model = train.main(train_ds, val_ds, model, hparams, path, val_iter=args.val_iter, reg=args.weight, coef_norm=coef_norm)
